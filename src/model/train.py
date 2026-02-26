@@ -1,0 +1,203 @@
+from sklearn.model_selection import train_test_split
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from pathlib import Path
+import pandas as pd
+from tqdm import tqdm
+from transformers import AutoFeatureExtractor
+import torchaudio
+import random
+from model.model import PretrainedGenreTransformer, evaluate_model
+from config.config import AUDIO_LENGTH, SAMPLE_RATE, TRANSFORMER_MODEL_NAME
+import numpy as np
+from torch.amp import autocast, GradScaler
+
+from model.EarlyStopping import EarlyStopping
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class GenreDataset(Dataset):
+    def __init__(self, metadata_df, audio_dir):
+        self.df = metadata_df
+        self.audio_dir = Path(audio_dir)
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(
+            TRANSFORMER_MODEL_NAME
+        )
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+
+        file_path = self.audio_dir / f"{row['yt_id']}.m4a"
+
+        waveform, sr = torchaudio.load(file_path)
+
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        if sr != SAMPLE_RATE:
+            resampler = torchaudio.transforms.Resample(sr, SAMPLE_RATE)
+            waveform = resampler(waveform)
+
+        waveform = waveform.squeeze(0)
+
+        length = waveform.shape[0]
+        crop_size = int(SAMPLE_RATE * AUDIO_LENGTH)
+
+        if length > crop_size:
+            start = random.randint(0, length - crop_size)
+            waveform = waveform[start : start + crop_size]
+        else:
+            padding = crop_size - length
+            waveform = torch.nn.functional.pad(waveform, (0, padding))
+
+        one_hot = torch.zeros(16)
+        one_hot[row["genres"]] = 1.0
+
+        labels = one_hot
+
+        inputs = self.feature_extractor(
+            waveform.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt"
+        )
+
+        return inputs["input_values"].squeeze(0), labels
+
+
+def set_seed(seed: int):
+    import random
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # cuDNN determinism
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def run_with_seed(seed: int = None, verbose: bool = True):
+    if seed is None:
+        seed = np.random.randint(0, 10000)
+
+    dataset = pd.read_json("dataset/videos.json")
+    train_df, val_df = train_test_split(dataset, test_size=0.1)
+
+    train_df.reset_index(drop=True)
+    val_df.reset_index(drop=True)
+
+    audio_dir = "dataset/audio"
+    train_dataset = GenreDataset(train_df, audio_dir)
+    val_dataset = GenreDataset(val_df, audio_dir)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+
+    BATCH_SIZE = 8
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        worker_init_fn=lambda worker_id: np.random.seed(seed + worker_id),
+        generator=g,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+        worker_init_fn=lambda worker_id: np.random.seed(seed + worker_id),
+        generator=g,
+    )
+
+    n_classes = 16
+
+    model = PretrainedGenreTransformer(n_classes).to(DEVICE)
+
+    LR = 1e-5
+    EPOCHS = 30
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+    scaler = GradScaler()
+
+    early_stopping = EarlyStopping(patience=3, min_delta=0.000)
+    best_state = None
+    # scheduler = get_linear_schedule_with_warmup(
+    #     optimizer,
+    #     num_warmup_steps=0,
+    #     num_training_steps=len(dataloader) * EPOCHS,
+    # )
+
+    for epoch in range(1, EPOCHS + 1):
+        model.train()
+        total_loss = 0
+
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS}")
+        for inputs, labels in progress_bar:
+            inputs = inputs.to(DEVICE)
+            labels = labels.to(DEVICE)
+
+            optimizer.zero_grad()
+
+            with autocast("cuda"):
+                logits = model(inputs)
+                loss = criterion(logits, labels)
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+
+            total_loss += loss.detach()
+
+        train_loss = total_loss.item() / len(train_loader)
+        val_metrics = evaluate_model(model, val_loader)
+
+        if verbose:
+            print(
+                f"Epoch {epoch:04d} | train_loss {train_loss:.4f} | val_loss {val_metrics['loss']:.4f} | val_f1_micro {val_metrics['f1_micro']:.4f} | val_f1_macro {val_metrics['f1_macro']:.4f} | val_acc {val_metrics['accuracy']:.4f}"
+            )
+
+        if val_metrics["f1_macro"] > early_stopping.best_score:
+            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+        if early_stopping(val_metrics["f1_macro"]):
+            if verbose:
+                print("Early stopping triggered.")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    final_metrics = evaluate_model(model, val_loader)
+    if verbose:
+        print("Final validation metrics:", final_metrics)
+
+    return final_metrics["f1_macro"], model
+
+
+def main() -> None:
+    SEEDS = [42, 123, 2024, 7, 999]
+    f1_macros = []
+    for seed in SEEDS:
+        print(f"Running training with seed {seed}...")
+        f1_macro, model = run_with_seed(seed=seed, verbose=True)
+        f1_macros.append(f1_macro)
+        print(f"Seed {seed} | F1 Macro: {f1_macro:.4f}")
+
+    avg_f1_macro = sum(f1_macros) / len(f1_macros)
+    print(f"Average F1 Macro over seeds: {avg_f1_macro:.4f}")
+    print(f"F1 Macro Std Dev: {np.std(f1_macros):.4f}")
+    print(f"F1 Macro Min: {min(f1_macros):.4f} | F1 Macro Max: {max(f1_macros):.4f}")
