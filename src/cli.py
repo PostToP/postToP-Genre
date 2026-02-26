@@ -12,16 +12,16 @@ def run_fetch() -> None:
     fetch_videos()
 
 
-# def run_preprocess() -> None:
-#     from data.preprocess import preprocess_dataset
+def run_preprocess() -> None:
+    from data.preprocess import preprocess_dataset
 
-#     preprocess_dataset()
+    preprocess_dataset()
 
 
-# def run_split() -> None:
-#     from data.split_dataset import split_dataset
+def run_split() -> None:
+    from data.split_dataset import split_dataset
 
-#     split_dataset()
+    split_dataset()
 
 
 # def run_feature_extraction() -> None:
@@ -36,10 +36,10 @@ def run_train() -> None:
     train_model()
 
 
-# def run_tokenize() -> None:
-#     from model.tokenize import tokenize_dataset
+def run_tokenize() -> None:
+    from model.tokenize import tokenize_dataset
 
-#     tokenize_dataset()
+    tokenize_dataset()
 
 
 # def run_compile() -> None:
@@ -51,9 +51,9 @@ def run_train() -> None:
 def main() -> None:
     COMMANDS = {
         "fetch": run_fetch,
-        # "split": run_split,
-        # "preprocess": run_preprocess,
-        # "tokenize": run_tokenize,
+        "tokenize": run_tokenize,
+        "preprocess": run_preprocess,
+        "split": run_split,
         # "feature": run_feature_extraction,
         "train": run_train,
         # "compile": run_compile,

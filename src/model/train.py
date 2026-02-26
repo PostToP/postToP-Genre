@@ -7,9 +7,8 @@ import pandas as pd
 from tqdm import tqdm
 from transformers import AutoFeatureExtractor
 import torchaudio
-import random
 from model.model import PretrainedGenreTransformer, evaluate_model
-from config.config import AUDIO_LENGTH, SAMPLE_RATE, TRANSFORMER_MODEL_NAME
+from config.config import SAMPLE_RATE, TRANSFORMER_MODEL_NAME
 import numpy as np
 from torch.amp import autocast, GradScaler
 
@@ -32,33 +31,10 @@ class GenreDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
 
-        file_path = self.audio_dir / f"{row['yt_id']}.m4a"
-
+        file_path = self.audio_dir / f"{row['yt_id']}_chunk_{row['chunk_index']}.wav"
         waveform, sr = torchaudio.load(file_path)
 
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
-
-        if sr != SAMPLE_RATE:
-            resampler = torchaudio.transforms.Resample(sr, SAMPLE_RATE)
-            waveform = resampler(waveform)
-
-        waveform = waveform.squeeze(0)
-
-        length = waveform.shape[0]
-        crop_size = int(SAMPLE_RATE * AUDIO_LENGTH)
-
-        if length > crop_size:
-            start = random.randint(0, length - crop_size)
-            waveform = waveform[start : start + crop_size]
-        else:
-            padding = crop_size - length
-            waveform = torch.nn.functional.pad(waveform, (0, padding))
-
-        one_hot = torch.zeros(16)
-        one_hot[row["genres"]] = 1.0
-
-        labels = one_hot
+        labels = torch.tensor(row["labels"], dtype=torch.float32)
 
         inputs = self.feature_extractor(
             waveform.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt"
@@ -88,20 +64,17 @@ def run_with_seed(seed: int = None, verbose: bool = True):
     if seed is None:
         seed = np.random.randint(0, 10000)
 
-    dataset = pd.read_json("dataset/videos.json")
-    train_df, val_df = train_test_split(dataset, test_size=0.1)
+    train_df = pd.read_json("dataset/p4_dataset_train.json")
+    val_df = pd.read_json("dataset/p4_dataset_val.json")
 
-    train_df.reset_index(drop=True)
-    val_df.reset_index(drop=True)
-
-    audio_dir = "dataset/audio"
+    audio_dir = "dataset/audio_chunks"
     train_dataset = GenreDataset(train_df, audio_dir)
     val_dataset = GenreDataset(val_df, audio_dir)
 
     g = torch.Generator()
     g.manual_seed(seed)
 
-    BATCH_SIZE = 8
+    BATCH_SIZE = 24
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
@@ -121,14 +94,19 @@ def run_with_seed(seed: int = None, verbose: bool = True):
         generator=g,
     )
 
-    n_classes = 16
+    n_classes = len(train_df["labels"].iloc[0])
 
     model = PretrainedGenreTransformer(n_classes).to(DEVICE)
 
-    LR = 1e-5
     EPOCHS = 30
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": model.ast.parameters(), "lr": 1e-5},
+            {"params": model.classifier.parameters(), "lr": 1e-4},
+        ],
+        weight_decay=1e-4,
+    )
     criterion = nn.BCEWithLogitsLoss()
     scaler = GradScaler()
 
@@ -144,7 +122,7 @@ def run_with_seed(seed: int = None, verbose: bool = True):
         model.train()
         total_loss = 0
 
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}")
         for inputs, labels in progress_bar:
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
