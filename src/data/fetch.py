@@ -1,22 +1,30 @@
+import os
 from pathlib import Path
 
-from pytubefix import YouTube
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-def download_audio(yt_id: str, folder: Path) -> None:
-    url = f"https://www.youtube.com/watch?v={yt_id}"
-    yt = YouTube(url)
+def download_audio(yt_id: str, folder: Path, start_time: float = None) -> None:
+    proxy_url = os.getenv("AUDIO_FETCH_URL", "http://localhost:5000/fetch_audio")
+    output_path = folder / f"{yt_id}.m4a"
 
-    def itags():
-        max_audio = 0
-        audio_value = 0
-        for audio_stream in yt.streams.filter(only_audio=True):
-            abr = int(audio_stream.abr.replace("kbps", ""))
-            if abr > max_audio:
-                max_audio = abr
-                audio_value = audio_stream.itag
-        return audio_value
+    if proxy_url:
+        params = {"yt_id": yt_id}
+        if start_time is not None:
+            params["start_time"] = start_time
 
-    audio = itags()
-    asd = yt.streams.get_by_itag(audio)
-    asd.download(output_path=folder, filename=f"{yt_id}.m4a")
+        response = requests.get(proxy_url, params=params, stream=True, timeout=120)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Proxy fetch failed with {response.status_code}: {response.text}"
+            )
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        return
