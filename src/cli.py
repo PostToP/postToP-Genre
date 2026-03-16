@@ -42,10 +42,10 @@ def run_tokenize() -> None:
     tokenize_dataset()
 
 
-# def run_compile() -> None:
-#     from model.compile import compile_model
+def run_compile() -> None:
+    from model.compile import compile_model
 
-#     compile_model()
+    compile_model()
 
 
 def main() -> None:
@@ -56,7 +56,7 @@ def main() -> None:
         "split": run_split,
         # "feature": run_feature_extraction,
         "train": run_train,
-        # "compile": run_compile,
+        "compile": run_compile,
     }
 
     if len(sys.argv) < 2:
