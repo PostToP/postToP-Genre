@@ -1,4 +1,21 @@
-TABLE = {}
+TABLE = {
+    "Pop": 0,
+    "Rock": 1,
+    "Electronic": 2,
+    "Hip Hop": 3,
+    "Metal": 4,
+    # "Folk": 5,
+    "Classical": 5,
+    "Jazz": 6,
+    "R&B": 7,
+    "Country": 8,
+    "Reggae": 9,
+    # "Latin": 10,
+    "Easy Listening": 10,
+    "Blues": 11,
+    # "New Age": 12,
+    "Traditional Music": 12,
+}
 TABLE_BACK = {v: k for k, v in TABLE.items()}
 
 NUM_LABELS = len(TABLE)
