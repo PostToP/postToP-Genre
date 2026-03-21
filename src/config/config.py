@@ -7,14 +7,14 @@ TABLE = {
     # "Folk": 5,
     "Classical": 5,
     "Jazz": 6,
-    "R&B": 7,
-    "Country": 8,
-    "Reggae": 9,
+    # "R&B": 7,
+    "Country": 7,
+    "Reggae": 8,
     # "Latin": 10,
-    "Easy Listening": 10,
-    "Blues": 11,
+    "Easy Listening": 9,
+    "Blues": 10,
     # "New Age": 12,
-    "Traditional Music": 12,
+    "Traditional Music": 11,
 }
 TABLE_BACK = {v: k for k, v in TABLE.items()}
 
