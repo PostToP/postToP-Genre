@@ -112,7 +112,7 @@ def run_with_seed(seed: int = None, verbose: bool = True):
         ],
         weight_decay=1e-4,
     )
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     scaler = GradScaler()
 
     total_steps = len(train_loader) * EPOCHS
