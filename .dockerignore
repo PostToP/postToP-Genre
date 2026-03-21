@@ -182,4 +182,9 @@ dataset/
 
 .vscode/
 
-/model/
+Dockerfile
+.dockerignore
+*.pth
+*.tar.gz
+*.log
+docs/
