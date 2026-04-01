@@ -71,3 +71,10 @@ python src/cli.py fetch preprocess split tokenize train compile
 docker build -t ai-genre .
 docker run --rm -p 5000:5000 ai-genre
 ```
+
+Or pull and run the published image:
+
+```bash
+docker pull ghcr.io/posttop/ai-genre:latest
+docker run --rm -p 5000:5000 ghcr.io/posttop/ai-genre:latest
+```
